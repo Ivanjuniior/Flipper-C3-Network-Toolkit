@@ -11,6 +11,7 @@ Aplicativo externo (.fap) para controlar o ESP32-C3 Super Mini conectado ao Flip
 - Lista navegável de até 20 pontos de acesso por varredura.
 - Tela de detalhes para cada ponto de acesso.
 - Navegação pela lista: cima/baixo; OK abre detalhes; BACK retorna.
+- A implementação de aquisição e liberação da UART mantém o fluxo da versão previamente testada.
 
 ## Hardware
 
@@ -23,10 +24,6 @@ Confirme a pinagem da sua revisão de placa antes de energizar.
 
 ## Build com uFBT
 
-Instale o uFBT oficial:
-
-    python3 -m pip install --upgrade ufbt
-
 Compile a partir desta pasta:
 
     cd flipper_app
@@ -38,11 +35,16 @@ Para enviar e iniciar no Flipper conectado por USB:
 
     ufbt launch
 
-O comando ufbt launch requer o Flipper conectado por USB e uma versão de firmware compatível com o SDK instalado pelo uFBT.
+## Protocolo esperado
+
+O firmware responde com linhas terminadas em newline. Para cada ponto de acesso:
+
+    AP ssid="..." bssid=AA:BB:CC:DD:EE:FF rssi=-55 channel=6 auth=3
+
+O parser usa os campos SSID, BSSID, RSSI, canal e código de autenticação enviados pelo firmware.
 
 ## Limitações desta versão
 
 - A lista armazena até 20 redes por varredura; a contagem total recebida do ESP32 continua sendo exibida.
-- O protocolo atual é textual e orientado a linhas. O parser atual espera SSID entre aspas e os campos bssid, rssi, channel e auth.
-- O tipo de autenticação é apresentado a partir do código numérico enviado pelo Arduino Wi-Fi API.
-- BLE e diagnósticos de conectividade serão adicionados em etapas posteriores.
+- A lista depende do formato textual documentado acima.
+- BLE e diagnósticos adicionais de conectividade serão implementados em etapas posteriores.
