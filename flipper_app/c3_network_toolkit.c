@@ -194,7 +194,7 @@ static void c3_network_draw_callback(Canvas* canvas, void* context) {
             canvas_draw_str(canvas, 2, 33, line);
             snprintf(line, sizeof(line), "BSSID: %.17s", ap->bssid);
             canvas_draw_str(canvas, 2, 42, line);
-            snprintf(line, sizeof(line), "RSSI: %d dBm  CH: %u", ap->rssi, ap->channel);
+            snprintf(line, sizeof(line), "RSSI: %d dBm  CH: %u", ap->rssi, (unsigned int)ap->channel);
             canvas_draw_str(canvas, 2, 51, line);
             snprintf(line, sizeof(line), "SEC: %s", c3_network_auth_name(ap->auth));
             canvas_draw_str(canvas, 2, 60, line);
