@@ -14,8 +14,18 @@
 #define RX_BUFFER_SIZE 512U
 #define RX_BUFFER_MASK (RX_BUFFER_SIZE - 1U)
 #define RX_LINE_SIZE 160U
-#define MAX_VISIBLE_NETWORKS 4U
+#define MAX_NETWORKS 20U
+#define VISIBLE_NETWORKS 4U
 #define SSID_SIZE 33U
+#define BSSID_SIZE 18U
+
+typedef struct {
+    char ssid[SSID_SIZE];
+    char bssid[BSSID_SIZE];
+    int16_t rssi;
+    uint8_t channel;
+    uint8_t auth;
+} C3NetworkAp;
 
 typedef struct {
     Gui* gui;
@@ -35,16 +45,33 @@ typedef struct {
     bool command_pending;
 
     bool show_results;
+    bool show_details;
     bool scanning;
     uint8_t menu_index;
 
     uint16_t network_total;
     uint8_t network_count;
-    char network_ssids[MAX_VISIBLE_NETWORKS][SSID_SIZE];
-    int16_t network_rssi[MAX_VISIBLE_NETWORKS];
+    uint8_t selected_network;
+    uint8_t scroll_offset;
+    C3NetworkAp networks[MAX_NETWORKS];
 
     char last_message[32];
 } C3NetworkApp;
+
+static const char* c3_network_auth_name(uint8_t auth) {
+    switch(auth) {
+    case 0: return "OPEN";
+    case 1: return "WEP";
+    case 2: return "WPA-PSK";
+    case 3: return "WPA2-PSK";
+    case 4: return "WPA/WPA2";
+    case 5: return "WPA2-ENT";
+    case 6: return "WPA3-PSK";
+    case 7: return "WPA2/WPA3";
+    case 8: return "WAPI";
+    default: return "UNKNOWN";
+    }
+}
 
 static void c3_network_uart_rx_callback(
     FuriHalSerialHandle* handle,
@@ -64,6 +91,49 @@ static void c3_network_uart_rx_callback(
     }
 }
 
+static void c3_network_parse_ap(C3NetworkApp* app, const char* line) {
+    if(app->network_count >= MAX_NETWORKS) return;
+
+    const char* ssid_start = strstr(line, "ssid=\"");
+    const char* bssid_start = strstr(line, "bssid=");
+    const char* rssi_start = strstr(line, "rssi=");
+    const char* channel_start = strstr(line, "channel=");
+    const char* auth_start = strstr(line, "auth=");
+
+    if(!ssid_start || !bssid_start || !rssi_start || !channel_start || !auth_start) {
+        return;
+    }
+
+    ssid_start += 6;
+    const char* ssid_end = strchr(ssid_start, '"');
+    if(!ssid_end) return;
+
+    C3NetworkAp* ap = &app->networks[app->network_count];
+    const size_t ssid_length = (size_t)(ssid_end - ssid_start);
+    if(ssid_length == 0) {
+        snprintf(ap->ssid, sizeof(ap->ssid), "<hidden>");
+    } else {
+        const size_t copy_length = ssid_length < (SSID_SIZE - 1U) ?
+                                       ssid_length :
+                                       (SSID_SIZE - 1U);
+        memcpy(ap->ssid, ssid_start, copy_length);
+        ap->ssid[copy_length] = '\0';
+    }
+
+    bssid_start += 6;
+    const char* bssid_end = strchr(bssid_start, ' ');
+    if(!bssid_end) bssid_end = bssid_start + strlen(bssid_start);
+    size_t bssid_length = (size_t)(bssid_end - bssid_start);
+    if(bssid_length >= sizeof(ap->bssid)) bssid_length = sizeof(ap->bssid) - 1U;
+    memcpy(ap->bssid, bssid_start, bssid_length);
+    ap->bssid[bssid_length] = '\0';
+
+    ap->rssi = (int16_t)atoi(rssi_start + 5);
+    ap->channel = (uint8_t)atoi(channel_start + 8);
+    ap->auth = (uint8_t)atoi(auth_start + 5);
+    app->network_count++;
+}
+
 static void c3_network_process_line(C3NetworkApp* app, const char* line) {
     furi_mutex_acquire(app->mutex, FuriWaitForever);
 
@@ -74,43 +144,22 @@ static void c3_network_process_line(C3NetworkApp* app, const char* line) {
     } else if(strcmp(line, "SCAN_BEGIN") == 0) {
         app->scanning = true;
         app->show_results = true;
+        app->show_details = false;
         app->network_total = 0;
         app->network_count = 0;
+        app->selected_network = 0;
+        app->scroll_offset = 0;
         snprintf(app->last_message, sizeof(app->last_message), "Scanning Wi-Fi...");
     } else if(strncmp(line, "SCAN_COUNT ", 11) == 0) {
         app->network_total = (uint16_t)atoi(line + 11);
     } else if(strncmp(line, "AP ", 3) == 0) {
-        const char* ssid_start = strstr(line, "ssid=\"");
-        const char* rssi_start = strstr(line, "rssi=");
-
-        if(ssid_start && rssi_start) {
-            ssid_start += 6;
-            const char* ssid_end = strchr(ssid_start, '\"');
-
-            if(ssid_end && app->network_count < MAX_VISIBLE_NETWORKS) {
-                const size_t length = (size_t)(ssid_end - ssid_start);
-                char* destination = app->network_ssids[app->network_count];
-
-                if(length == 0) {
-                    snprintf(destination, SSID_SIZE, "<hidden>");
-                } else {
-                    const size_t copy_length = length < (SSID_SIZE - 1U) ?
-                                                   length :
-                                                   (SSID_SIZE - 1U);
-                    memcpy(destination, ssid_start, copy_length);
-                    destination[copy_length] = '\0';
-                }
-
-                app->network_rssi[app->network_count] = (int16_t)atoi(rssi_start + 5);
-                app->network_count++;
-            }
-        }
+        c3_network_parse_ap(app, line);
     } else if(strcmp(line, "SCAN_END") == 0) {
         app->scanning = false;
         snprintf(app->last_message, sizeof(app->last_message), "SCAN COMPLETE");
     } else if(strncmp(line, "ERROR ", 6) == 0) {
-        snprintf(app->last_message, sizeof(app->last_message), "ESP32 error");
         app->scanning = false;
+        snprintf(app->last_message, sizeof(app->last_message), "ESP32 error");
     }
 
     furi_mutex_release(app->mutex);
@@ -135,34 +184,53 @@ static void c3_network_draw_callback(Canvas* canvas, void* context) {
     canvas_set_font(canvas, FontPrimary);
     canvas_draw_str(canvas, 2, 10, "C3 NETWORK TOOLKIT");
     canvas_draw_line(canvas, 0, 13, 127, 13);
-
     canvas_set_font(canvas, FontSecondary);
 
     if(app->show_results) {
-        canvas_draw_str(canvas, 2, 23, app->scanning ? "Scanning Wi-Fi..." : "Wi-Fi results");
+        if(app->show_details && app->network_count > 0) {
+            const C3NetworkAp* ap = &app->networks[app->selected_network];
+            canvas_draw_str(canvas, 2, 23, "ACCESS POINT DETAILS");
+            snprintf(line, sizeof(line), "SSID: %.20s", ap->ssid);
+            canvas_draw_str(canvas, 2, 33, line);
+            snprintf(line, sizeof(line), "BSSID: %.17s", ap->bssid);
+            canvas_draw_str(canvas, 2, 42, line);
+            snprintf(line, sizeof(line), "RSSI: %d dBm  CH: %u", ap->rssi, ap->channel);
+            canvas_draw_str(canvas, 2, 51, line);
+            snprintf(line, sizeof(line), "SEC: %s", c3_network_auth_name(ap->auth));
+            canvas_draw_str(canvas, 2, 60, line);
+        } else {
+            snprintf(
+                line,
+                sizeof(line),
+                "Wi-Fi %u APs  %u/%u",
+                (unsigned int)app->network_total,
+                app->network_count ? (unsigned int)(app->selected_network + 1U) : 0U,
+                (unsigned int)app->network_count);
+            canvas_draw_str(canvas, 2, 23, line);
 
-        for(uint8_t i = 0; i < MAX_VISIBLE_NETWORKS; i++) {
-            if(i < app->network_count) {
-                snprintf(
-                    line,
-                    sizeof(line),
-                    "%s %d dBm",
-                    app->network_ssids[i],
-                    app->network_rssi[i]);
-                canvas_draw_str(canvas, 2, (uint8_t)(34 + (i * 8)), line);
+            for(uint8_t row = 0; row < VISIBLE_NETWORKS; row++) {
+                const uint8_t index = (uint8_t)(app->scroll_offset + row);
+                if(index < app->network_count) {
+                    const C3NetworkAp* ap = &app->networks[index];
+                    snprintf(
+                        line,
+                        sizeof(line),
+                        "%c%.13s %4d",
+                        index == app->selected_network ? '>' : ' ',
+                        ap->ssid,
+                        ap->rssi);
+                    canvas_draw_str(canvas, 2, (uint8_t)(33 + (row * 9)), line);
+                }
+            }
+
+            if(app->network_count == 0 && !app->scanning) {
+                canvas_draw_str(canvas, 2, 42, "No networks found");
+            } else if(app->scanning) {
+                canvas_draw_str(canvas, 2, 60, "Scanning...");
+            } else {
+                canvas_draw_str(canvas, 2, 60, "OK: details  BACK: menu");
             }
         }
-
-        if(!app->scanning && app->network_total == 0 && app->network_count == 0) {
-            canvas_draw_str(canvas, 2, 39, "No networks found");
-        }
-
-        snprintf(
-            line,
-            sizeof(line),
-            "%u found  |  BACK: menu",
-            (unsigned int)app->network_total);
-        canvas_draw_str(canvas, 2, 63, line);
     } else {
         canvas_draw_str(canvas, 2, 23, app->serial ? "UART: 115200 READY" : "UART: BUSY");
         const char* items[] = {"PING", "STATUS", "SCAN WI-FI"};
@@ -187,11 +255,35 @@ static void c3_network_input_callback(InputEvent* event, void* context) {
     furi_mutex_acquire(app->mutex, FuriWaitForever);
 
     if(event->key == InputKeyBack) {
-        if(app->show_results) {
+        if(app->show_results && app->show_details) {
+            app->show_details = false;
+            update = true;
+        } else if(app->show_results) {
             app->show_results = false;
             update = true;
         } else {
             app->running = false;
+        }
+    } else if(app->show_results && !app->show_details && event->key == InputKeyUp) {
+        if(app->selected_network > 0) {
+            app->selected_network--;
+            if(app->selected_network < app->scroll_offset) {
+                app->scroll_offset = app->selected_network;
+            }
+            update = true;
+        }
+    } else if(app->show_results && !app->show_details && event->key == InputKeyDown) {
+        if(app->selected_network + 1U < app->network_count) {
+            app->selected_network++;
+            if(app->selected_network >= app->scroll_offset + VISIBLE_NETWORKS) {
+                app->scroll_offset = (uint8_t)(app->selected_network - VISIBLE_NETWORKS + 1U);
+            }
+            update = true;
+        }
+    } else if(app->show_results && !app->show_details && event->key == InputKeyOk) {
+        if(app->network_count > 0) {
+            app->show_details = true;
+            update = true;
         }
     } else if(!app->show_results && event->key == InputKeyUp) {
         app->menu_index = app->menu_index == 0 ? 2 : (uint8_t)(app->menu_index - 1);
@@ -209,9 +301,12 @@ static void c3_network_input_callback(InputEvent* event, void* context) {
 
             if(app->menu_index == 2) {
                 app->show_results = true;
+                app->show_details = false;
                 app->scanning = true;
                 app->network_total = 0;
                 app->network_count = 0;
+                app->selected_network = 0;
+                app->scroll_offset = 0;
                 snprintf(app->last_message, sizeof(app->last_message), "Scanning...");
             } else {
                 snprintf(app->last_message, sizeof(app->last_message), "Command sent");
