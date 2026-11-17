@@ -1,0 +1,9 @@
+App(
+    appid="c3_network_toolkit",
+    name="C3 Network",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="c3_network_toolkit_app",
+    stack_size=3 * 1024,
+    requires=["gui"],
+    fap_category="Tools",
+)

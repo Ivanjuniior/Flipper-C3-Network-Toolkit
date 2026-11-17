@@ -1,0 +1,37 @@
+name: Flipper app build
+
+on:
+  push:
+    paths:
+      - 'flipper_app/**'
+      - '.github/workflows/flipper-app-build.yml'
+  pull_request:
+    paths:
+      - 'flipper_app/**'
+      - '.github/workflows/flipper-app-build.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install uFBT
+        run: python -m pip install --upgrade ufbt
+
+      - name: Build Flipper application
+        working-directory: flipper_app
+        run: ufbt
+
+      - name: Upload FAP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: c3-network-toolkit-fap
+          path: flipper_app/dist/*.fap
+          if-no-files-found: error
